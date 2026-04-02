@@ -1,0 +1,33 @@
+{
+  "name": "@figasweb/comparator",
+  "version": "1.0.0",
+  "description": "Reusable comparison framework - Cloudflare Workers + KV + Scraping Engine",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./worker": {
+      "types": "./dist/worker/index.d.ts",
+      "import": "./dist/worker/index.js"
+    },
+    "./scraper": {
+      "types": "./dist/scraper/index.d.ts",
+      "import": "./dist/scraper/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "@cloudflare/workers-types": "^4.20250401.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0"
+  }
+}
