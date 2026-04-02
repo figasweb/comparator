@@ -2,8 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ScrapingSource, ScrapingResult, ScrapingReport, ValidationRule } from '../types/index.js';
 
 export interface ScraperConfig {
-  /** Anthropic API key for LLM fallback */
-  anthropicApiKey: string;
+  /** Anthropic API key for LLM fallback. If omitted, LLM fallback is disabled (manual mode). */
+  anthropicApiKey?: string;
   /** Model to use for LLM fallback (default: claude-haiku-4-5-20251001) */
   model?: string;
   /** User-Agent for HTTP requests */
@@ -12,6 +12,21 @@ export interface ScraperConfig {
   timeout?: number;
   /** Callback for logging/notifications */
   onLog?: (message: string) => void;
+  /**
+   * Called when regex extraction fails and LLM is not available.
+   * Receives the HTML, source info, and failed fields.
+   * Use this to save failure reports for manual review.
+   */
+  onExtractionFailure?: (context: ExtractionFailureContext) => void;
+}
+
+export interface ExtractionFailureContext {
+  sourceId: string;
+  sourceName: string;
+  url: string;
+  html: string;
+  failedFields: string[];
+  currentPatterns: Record<string, string>;
 }
 
 /**
@@ -25,17 +40,23 @@ export interface ScraperConfig {
  * 5. If LLM succeeds → ask LLM to generate improved regex for next time
  */
 export class Scraper {
-  private client: Anthropic;
+  private client: Anthropic | null;
   private config: Required<Pick<ScraperConfig, 'model' | 'userAgent' | 'timeout'>> & ScraperConfig;
 
   constructor(config: ScraperConfig) {
-    this.client = new Anthropic({ apiKey: config.anthropicApiKey });
+    this.client = config.anthropicApiKey
+      ? new Anthropic({ apiKey: config.anthropicApiKey })
+      : null;
     this.config = {
       model: 'claude-haiku-4-5-20251001',
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
       timeout: 15000,
       ...config,
     };
+  }
+
+  get hasLlm(): boolean {
+    return this.client !== null;
   }
 
   private log(msg: string) {
@@ -106,7 +127,37 @@ export class Scraper {
       };
     }
 
-    // Step 4: LLM fallback
+    // Step 4: LLM fallback (or manual mode)
+    if (!this.client) {
+      this.log(`  Regex failed for ${source.nome}: missing=[${regexResult.missing.join(',')}] validation=[${validationErrors.join(',')}]. No LLM available (manual mode).`);
+
+      // Notify via callback for manual review
+      if (this.config.onExtractionFailure) {
+        const currentPatterns: Record<string, string> = {};
+        for (const f of regexResult.missing) {
+          currentPatterns[f] = source.patterns[f]?.source || 'none';
+        }
+        this.config.onExtractionFailure({
+          sourceId: source.id,
+          sourceName: source.nome,
+          url: source.url,
+          html,
+          failedFields: regexResult.missing,
+          currentPatterns,
+        });
+      }
+
+      return {
+        sourceId: source.id,
+        success: false,
+        data: regexResult.data,
+        errors: [
+          `Regex: missing=[${regexResult.missing.join(',')}] validation=[${validationErrors.join(',')}]`,
+          'LLM not available — manual fix required',
+        ],
+      };
+    }
+
     this.log(`  Regex failed for ${source.nome}: missing=[${regexResult.missing.join(',')}] validation=[${validationErrors.join(',')}]. Trying LLM...`);
 
     try {
@@ -237,7 +288,7 @@ export class Scraper {
     // Truncate HTML to avoid token limits (keep first 30k chars)
     const truncatedHtml = html.length > 30000 ? html.substring(0, 30000) : html;
 
-    const response = await this.client.messages.create({
+    const response = await this.client!.messages.create({
       model: this.config.model,
       max_tokens: 1024,
       messages: [
@@ -285,7 +336,7 @@ ${truncatedHtml}`,
       pattern: source.patterns[f]?.source || 'none',
     }));
 
-    const response = await this.client.messages.create({
+    const response = await this.client!.messages.create({
       model: this.config.model,
       max_tokens: 1024,
       messages: [
